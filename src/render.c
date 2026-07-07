@@ -256,33 +256,106 @@ static void draw_stars(void)
     }
 }
 
+static uint32_t mix_rgb(uint32_t a, uint32_t b, float t)
+{
+    t = clampf(t, 0, 1);
+    int ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+    int br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+    int r = ar + (int)((br - ar) * t);
+    int g = ag + (int)((bg - ag) * t);
+    int bl = ab + (int)((bb - ab) * t);
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)bl;
+}
+
+static uint32_t scale_rgb(uint32_t rgb, float k)
+{
+    k = clampf(k, 0, 2);
+    int r = (int)(((rgb >> 16) & 255) * k);
+    int g = (int)(((rgb >> 8) & 255) * k);
+    int b = (int)((rgb & 255) * k);
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+static bool ellipse_mask(float x, float y, float cx, float cy,
+                         float rx, float ry, float rot)
+{
+    float s = sinf(rot), c = cosf(rot);
+    float px = x - cx, py = y - cy;
+    float qx = px * c + py * s;
+    float qy = -px * s + py * c;
+    return (qx * qx) / (rx * rx) + (qy * qy) / (ry * ry) < 1.0f;
+}
+
 static void draw_earth(void)
 {
-    int block = (int)clampf(H / 280.0f, 2.0f, 4.0f);
-    int r = (int)clampf(H * 0.040f, 13.0f, 34.0f);
+    int block = (int)clampf(H / 360.0f, 1.0f, 2.0f);
+    int r = (int)clampf(H * 0.055f, 24.0f, 44.0f);
     bool hud = G.state == GS_PLAYING || G.state == GS_CRASHING ||
                G.state == GS_LEVEL_COMPLETE || G.state == GS_GAMEOVER;
-    int cx = W - r * 3;
-    int cy = hud ? (int)(H * 0.24f) : r * 2;
+    int cx = W - (int)(r * 2.45f);
+    int cy = hud ? (int)(H * 0.255f) : (int)(r * 2.15f);
+
+    fill_circle(cx - r * 0.10f, cy - r * 0.08f, r + block * 2.2f, 0x2563eb, 0.08f);
+    fill_circle(cx - r * 0.18f, cy - r * 0.16f, r + block * 0.9f, 0x93c5fd, 0.05f);
+
     for (int y = cy - r - block; y <= cy + r + block; y += block) {
         for (int x = cx - r - block; x <= cx + r + block; x += block) {
             float dx = x + block * 0.5f - cx;
             float dy = y + block * 0.5f - cy;
-            float d = sqrtf(dx * dx + dy * dy);
-            if (d > r + block * 0.4f) continue;
-            uint32_t col = 0x1d4ed8;
-            if (d > r * 0.88f) col = 0x60a5fa;
-            if (fabsf(dy) > r * 0.68f && d < r * 0.92f) col = 0xe2e8f0;
-            int land = ((int)(dx * 0.55f + dy * 0.90f + 300) % 13);
-            if ((land >= 0 && land < 5 && d > r * 0.18f && fabsf(dy) < r * 0.72f) ||
-                ((int)(dx - dy + 200) % 17) < 4)
-                col = 0x22c55e;
-            if (dx > r * 0.35f && d < r * 0.92f) col = (col == 0xe2e8f0) ? 0xcbd5e1 : 0x1e3a8a;
+            float u = dx / r, v = dy / r;
+            float d2 = u * u + v * v;
+            if (d2 > 1.0f) continue;
+
+            float z = sqrtf(1.0f - d2);
+            float light = clampf(-u * 0.42f - v * 0.30f + z * 0.82f, 0, 1);
+            float limb = clampf((1.0f - sqrtf(d2)) * 4.0f, 0, 1);
+            uint32_t col = mix_rgb(0x0b1f5d, 0x1d70d6, 0.45f + 0.45f * light);
+            col = mix_rgb(col, 0x38bdf8, 0.16f * limb);
+
+            bool land =
+                ellipse_mask(u, v, -0.38f, -0.18f, 0.25f, 0.18f, -0.55f) ||
+                ellipse_mask(u, v, -0.18f,  0.28f, 0.16f, 0.33f, -0.18f) ||
+                ellipse_mask(u, v,  0.13f, -0.07f, 0.18f, 0.30f,  0.08f) ||
+                ellipse_mask(u, v,  0.34f, -0.22f, 0.34f, 0.19f,  0.28f) ||
+                ellipse_mask(u, v,  0.50f,  0.35f, 0.16f, 0.09f, -0.20f);
+            bool coast =
+                ellipse_mask(u, v, -0.38f, -0.18f, 0.30f, 0.22f, -0.55f) ||
+                ellipse_mask(u, v, -0.18f,  0.28f, 0.20f, 0.38f, -0.18f) ||
+                ellipse_mask(u, v,  0.13f, -0.07f, 0.22f, 0.35f,  0.08f) ||
+                ellipse_mask(u, v,  0.34f, -0.22f, 0.39f, 0.24f,  0.28f) ||
+                ellipse_mask(u, v,  0.50f,  0.35f, 0.20f, 0.13f, -0.20f);
+
+            if (coast && !land)
+                col = mix_rgb(col, 0x7dd3fc, 0.45f);
+            if (land) {
+                float dry = clampf(v * 0.8f + u * 0.25f + 0.35f, 0, 1);
+                col = mix_rgb(0x16a34a, 0xb6a35a, dry);
+            }
+            if (fabsf(v) > 0.72f)
+                col = mix_rgb(col, 0xf8fafc, clampf((fabsf(v) - 0.68f) * 3.5f, 0, 0.78f));
+
+            float cloud1 = 1.0f - fabsf(v + 0.22f + 0.08f * sinf(u * 8.0f));
+            float cloud2 = 1.0f - fabsf(v - 0.28f + 0.10f * sinf(u * 7.0f + 1.8f));
+            float clouds = 0.0f;
+            if (cloud1 > 0.93f && u > -0.82f && u < 0.58f) clouds = 0.38f;
+            if (cloud2 > 0.91f && u > -0.52f && u < 0.86f) clouds = fmaxf(clouds, 0.45f);
+            if ((((int)((u + 1.2f) * 31.0f) + (int)((v + 1.0f) * 37.0f)) & 7) == 0)
+                clouds *= 0.45f;
+            col = mix_rgb(col, 0xf8fafc, clouds);
+
+            float shade = 0.34f + 0.74f * light;
+            shade *= 0.78f + 0.22f * limb;
+            if (u > 0.46f) shade *= 1.0f - clampf((u - 0.46f) * 1.25f, 0, 0.45f);
+            col = scale_rgb(col, shade);
+
             pixel_rect(x, y, block, block, col);
         }
     }
-    pixel_rect(cx - r - block, cy - block, block, block, 0x93c5fd);
-    pixel_rect(cx + r, cy, block, block, 0x0f172a);
+    ring(cx, cy, r + 0.5f, fmaxf(1.0f, block * 0.9f), 0xbfdbfe, 0.42f);
+    ring(cx - r * 0.10f, cy - r * 0.08f, r - block * 0.5f, 1.0f, 0xeff6ff, 0.10f);
 }
 
 static void draw_terrain(void)
