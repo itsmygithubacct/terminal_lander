@@ -1,0 +1,7 @@
+*.o
+/terminal-lander
+/render_*.ppm
+/render_*.png
+/gmon.out
+/core
+/core.*
