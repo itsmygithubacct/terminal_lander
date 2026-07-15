@@ -22,6 +22,18 @@ SOFTWARE.
 
 ---
 
+Sound-effect asset exception
+
+The MIT License above does not apply to the ElevenLabs-generated WAV files in
+assets/sfx/. Those files are included solely as bundled components of Terminal
+Lander, subject to the ElevenLabs Terms of Service, Sound Effects Terms, and
+Prohibited Use Policy. No permission is granted here to sell, distribute,
+license, sublicense, or otherwise exploit those sound effects on a standalone
+basis, including as isolated files, samples, or part of a sound library. See
+docs/asset-sources.md and docs/audio-provenance.json.
+
+---
+
 The embedded terminal font (src/font8x16.h) is extracted from Debian
 console-setup's Lat15-Fixed16 console font, which Debian declares public
 domain ("All console fonts are public domain by nature"). Its X11-lineage

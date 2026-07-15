@@ -148,10 +148,14 @@ static int sound_test(void)
     if (!ok)
         printf("sound-test: no supported audio sink found; game will run silent\n");
     else
-        printf("sound-test: playing procedural sounds\n");
+        printf("sound-test: playing every production sound bank\n");
 
     sound_play(SND_MENU, 0.6f, 1.0f);
     sleep_ms(180);
+    sound_play(SND_BEEP, 0.65f, 1.0f);
+    sleep_ms(200);
+    sound_play(SND_WARNING, 0.65f, 1.0f);
+    sleep_ms(330);
     sound_loop(SND_THRUST_MAIN, true, 0.55f, 1.0f);
     sleep_ms(700);
     sound_loop(SND_THRUST_SIDE, true, 0.35f, 1.1f);
