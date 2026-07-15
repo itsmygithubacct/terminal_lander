@@ -1,8 +1,8 @@
 # Terminal Lander
 
 Kitty-protocol Lunar Lander in C: a software-rendered RGBA framebuffer,
-zlib/base64 kitty graphics, raw keyboard input, banked physical sound effects,
-and a fixed-timestep game loop.
+zlib/base64 kitty graphics, exact press/release keyboard input, banked physical
+sound effects, and a fixed-timestep game loop.
 
 It follows the Bashed Earth terminal-rendering style while turning the Python
 `terminal_lander.py` prototype into a native retro arcade game with lunar
@@ -27,6 +27,9 @@ wezterm.
   procedural synthesizer remains as a missing-asset fallback
 - **Terminal-native presentation** - no SDL, no X11, no ncurses; frames are
   compressed and streamed through the kitty graphics protocol
+- **Independent held controls** - Kitty keyboard press and release events keep
+  simultaneous main and side thrust responsive, with a press-only fallback
+  for terminals that do not report releases
 - **Headless checks** - deterministic selftest and render-test modes for CI
 
 ## Build
@@ -75,7 +78,7 @@ packaging and installed-layout tests.
 
 | File | Role |
 |------|------|
-| `src/term.c` | raw mode, key decoding, kitty graphics frames, threaded zlib + base64 presenter |
+| `src/term.c` | Kitty keyboard events, compatibility input, graphics frames, threaded zlib + base64 presenter |
 | `src/game.c` | lander physics, terrain generation, pads, particles, difficulty, scoring |
 | `src/render.c` | software rasterizer, scene, HUD, menus, embedded PSF font |
 | `src/sound.c` | strict PCM WAV banks, seamless loop playback, procedural fallback, and CLI-sink mixer |

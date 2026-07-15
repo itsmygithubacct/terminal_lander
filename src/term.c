@@ -15,6 +15,9 @@
  * one (frame drop, never a stall).
  */
 #include "terminal_lander.h"
+#include "kitty_keyboard_posix.h"
+
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +29,8 @@
 
 static struct termios origTermios;
 static bool rawActive = false;
+static bool keyboardActive = false;
+static kittykb_terminal keyboard;
 static volatile int shutdownClaimed = 0;
 
 static const char B64[] =
@@ -74,7 +79,9 @@ static char originSeq[32] = "\x1b[H";   /* cursor move to centered origin */
 
 bool term_init(int *outW, int *outH)
 {
-    if (!isatty(STDIN_FILENO)) return false;
+    kittykb_terminal_options keyboardOptions;
+
+    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) return false;
 
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0) return false;
@@ -111,18 +118,34 @@ bool term_init(int *outW, int *outH)
     if (or_ < 1) or_ = 1;
     snprintf(originSeq, sizeof originSeq, "\x1b[%d;%dH", or_, oc);
 
-    tcgetattr(STDIN_FILENO, &origTermios);
+    if (tcgetattr(STDIN_FILENO, &origTermios) != 0) return false;
     struct termios raw = origTermios;
     raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
     raw.c_iflag &= ~(IXON | ICRNL | BRKINT | INPCK | ISTRIP);
     raw.c_oflag &= ~OPOST;
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) return false;
     rawActive = true;
 
     /* alt screen, hide cursor, clear */
     write_str("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
+
+    kittykb_terminal_init(&keyboard);
+    kittykb_terminal_options_init(&keyboardOptions);
+    keyboardOptions.flags = KITTYKB_FLAGS_KEY_STATE;
+    keyboardOptions.make_raw = false;
+    keyboardOptions.make_nonblocking = false;
+    if (kittykb_terminal_start(&keyboard, STDIN_FILENO, STDOUT_FILENO,
+                               &keyboardOptions) != 0) {
+        int error = errno;
+        write_str("\x1b[?25h\x1b[?1049l");
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &origTermios);
+        rawActive = false;
+        errno = error;
+        return false;
+    }
+    keyboardActive = true;
     return true;
 }
 
@@ -137,6 +160,10 @@ static bool claim_shutdown(void)
 
 static void restore_terminal(void)
 {
+    if (keyboardActive) {
+        (void)kittykb_terminal_stop(&keyboard);
+        keyboardActive = false;
+    }
     /* leading ST closes any APC a killed presenter left half-written */
     write_str("\x1b\\\x1b_Ga=d,d=A,q=2\x1b\\");
     write_str("\x1b[?25h\x1b[?1049l");
@@ -156,8 +183,13 @@ void term_shutdown(void)
  * the presenter mutex can deadlock against its own interrupted thread */
 void term_emergency_restore(void)
 {
+    static const char emergency[] =
+        "\x1b\\\x1b_Ga=d,d=A,q=2\x1b\\\x1b[<u\x1b[?25h\x1b[?1049l";
+
     if (!claim_shutdown()) return;
-    restore_terminal();
+    (void)write(STDOUT_FILENO, emergency, sizeof emergency - 1);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &origTermios);
+    rawActive = false;
 }
 
 /* runs on the presenter thread only */
@@ -297,35 +329,27 @@ static void presenter_stop(void)
     pthread_join(presenter, NULL);
 }
 
-/* Decode one key from stdin; returns -1 when no input is pending. */
-int term_poll_key(void)
+int term_read_input(void)
 {
-    unsigned char c;
-    ssize_t n = read(STDIN_FILENO, &c, 1);
-    if (n <= 0) return -1;
-
-    if (c == '\r' || c == '\n') return KEY_ENTER;
-    if (c == 127 || c == 8) return KEY_BACKSPACE;
-    if (c == '\t') return KEY_TAB;
-    if (c == 3) { G.quit = true; return -1; }   /* ctrl-c */
-
-    if (c == 0x1b) {
-        unsigned char seq[4];
-        if (read(STDIN_FILENO, &seq[0], 1) <= 0) return KEY_ESC;
-        if (seq[0] != '[' && seq[0] != 'O') return KEY_ESC;
-        if (read(STDIN_FILENO, &seq[1], 1) <= 0) return KEY_ESC;
-        switch (seq[1]) {
-        case 'A': return KEY_UP;
-        case 'B': return KEY_DOWN;
-        case 'C': return KEY_RIGHT;
-        case 'D': return KEY_LEFT;
-        default:
-            /* swallow the rest of longer CSI sequences (e.g. \e[1;5A) */
-            while (seq[1] >= '0' && seq[1] <= ';') {
-                if (read(STDIN_FILENO, &seq[1], 1) <= 0) break;
-            }
-            return -1;
-        }
+    if (!keyboardActive) {
+        errno = EINVAL;
+        return -1;
     }
-    return c;
+    return kittykb_terminal_read(&keyboard);
+}
+
+bool term_next_key_event(kittykb_event *event)
+{
+    return keyboardActive && kittykb_input_next(&keyboard.input, event);
+}
+
+bool term_key_down(uint32_t key)
+{
+    return keyboardActive && kittykb_input_key_down(&keyboard.input, key);
+}
+
+bool term_has_release_events(void)
+{
+    return keyboardActive &&
+           kittykb_input_has_release_events(&keyboard.input);
 }

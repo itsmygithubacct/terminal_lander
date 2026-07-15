@@ -12,6 +12,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "kitty_keyboard.h"
+
 #define TICK_DT  (1.0f / 60.0f)
 #define TICK_MS  16.666666f
 
@@ -107,6 +109,7 @@ typedef struct {
     int frameCount;
     float levelTimer, crashTimer;
     float holdUp, holdLeft, holdRight;
+    bool heldControls, heldUp, heldLeft, heldRight;
     float screenFlash, cameraShake;
 
     float scale;
@@ -143,6 +146,7 @@ void game_start_run(void);
 void game_create_level(void);
 void game_tick(void);
 void game_handle_key(int key);
+void game_set_held_controls(bool available, bool up, bool left, bool right);
 void game_autopilot_tick(void);
 
 float terrain_height_at(float x);
@@ -160,7 +164,10 @@ uint8_t *render_fb(void);
 /* ---------- term.c ---------- */
 bool term_init(int *outW, int *outH);
 void term_present(const uint8_t *rgba, int w, int h);
-int term_poll_key(void);
+int term_read_input(void);
+bool term_next_key_event(kittykb_event *event);
+bool term_key_down(uint32_t key);
+bool term_has_release_events(void);
 void term_shutdown(void);
 void term_emergency_restore(void);
 

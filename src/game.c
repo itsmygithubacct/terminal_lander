@@ -463,18 +463,32 @@ static void tick_holds(void)
 static void update_playing(void)
 {
     Lander *l = &G.lander;
+    bool mainActive;
+    bool leftActive;
+    bool rightActive;
+
     l->mainThrust = l->leftThrust = l->rightThrust = false;
     tick_holds();
 
+    if (G.heldControls) {
+        mainActive = G.heldUp;
+        leftActive = G.heldLeft && !G.heldRight;
+        rightActive = G.heldRight && !G.heldLeft;
+    } else {
+        mainActive = G.holdUp > 0;
+        leftActive = G.holdLeft > 0 && G.holdRight <= 0;
+        rightActive = G.holdRight > 0 && G.holdLeft <= 0;
+    }
+
     if (l->fuel > 0) {
-        if (G.holdUp > 0) {
+        if (mainActive) {
             l->vx += G.thrustPower * sinf(l->angle) * TICK_DT;
             l->vy -= G.thrustPower * cosf(l->angle) * TICK_DT;
             l->fuel = fmaxf(0, l->fuel - G.fuelMainRate * TICK_DT);
             l->mainThrust = true;
             add_thrust_particles(-sinf(l->angle), cosf(l->angle), 2);
         }
-        if (G.holdLeft > 0) {
+        if (leftActive) {
             l->angularVelocity -= G.angularThrustPower * TICK_DT;
             l->vx -= G.sideThrustPower * TICK_DT;
             l->fuel = fmaxf(0, l->fuel - G.fuelSideRate * TICK_DT);
@@ -483,7 +497,7 @@ static void update_playing(void)
                          (frandf() - 0.5f) * 60 * G.scale, 0.18f, 2.0f,
                          0xffb000, PT_THRUST);
         }
-        if (G.holdRight > 0) {
+        if (rightActive) {
             l->angularVelocity += G.angularThrustPower * TICK_DT;
             l->vx += G.sideThrustPower * TICK_DT;
             l->fuel = fmaxf(0, l->fuel - G.fuelSideRate * TICK_DT);
@@ -596,6 +610,15 @@ static void thrust_hold_for_key(int key)
     if (key == KEY_UP || key == 'w' || key == 'W') G.holdUp = hold;
     if (key == KEY_LEFT || key == 'a' || key == 'A') G.holdLeft = hold;
     if (key == KEY_RIGHT || key == 'd' || key == 'D') G.holdRight = hold;
+}
+
+void game_set_held_controls(bool available, bool up, bool left, bool right)
+{
+    G.heldControls = available;
+    G.heldUp = available && up;
+    G.heldLeft = available && left;
+    G.heldRight = available && right;
+    if (available) G.holdUp = G.holdLeft = G.holdRight = 0;
 }
 
 void game_handle_key(int key)

@@ -1,5 +1,6 @@
 /* Entry point: terminal setup, fixed timestep, and headless checks. */
 #include "terminal_lander.h"
+#include <limits.h>
 #include <math.h>
 #include <signal.h>
 #include <stdio.h>
@@ -13,6 +14,46 @@ static void on_signal(int sig)
     (void)sig;
     term_emergency_restore();
     _exit(1);
+}
+
+static bool event_matches_letter(const kittykb_event *event, char lower)
+{
+    char upper = (char)(lower - 'a' + 'A');
+    return kittykb_event_matches_key(event, (uint32_t)(unsigned char)lower) ||
+           kittykb_event_matches_key(event, (uint32_t)(unsigned char)upper);
+}
+
+static int game_key_from_event(const kittykb_event *event)
+{
+    static const char letters[] = "acdqw";
+    for (size_t i = 0; i < sizeof letters - 1; i++)
+        if (event_matches_letter(event, letters[i])) return letters[i];
+
+    switch (event->key) {
+    case KITTYKB_KEY_ENTER: return KEY_ENTER;
+    case KITTYKB_KEY_BACKSPACE: return KEY_BACKSPACE;
+    case KITTYKB_KEY_TAB: return KEY_TAB;
+    case KITTYKB_KEY_ESCAPE: return KEY_ESC;
+    case KITTYKB_KEY_UP: return KEY_UP;
+    case KITTYKB_KEY_DOWN: return KEY_DOWN;
+    case KITTYKB_KEY_RIGHT: return KEY_RIGHT;
+    case KITTYKB_KEY_LEFT: return KEY_LEFT;
+    default:
+        return event->key <= (uint32_t)INT_MAX ? (int)event->key : -1;
+    }
+}
+
+static bool gameplay_control_key(int key)
+{
+    return key == KEY_UP || key == KEY_LEFT || key == KEY_RIGHT ||
+           key == 'w' || key == 'a' || key == 'd';
+}
+
+static bool interrupt_event(const kittykb_event *event)
+{
+    return event->key == 3u ||
+           (event_matches_letter(event, 'c') &&
+            (event->modifiers & KITTYKB_MOD_CTRL) != 0u);
 }
 
 static double now_ms(void)
@@ -99,6 +140,55 @@ static int selftest(unsigned seed, int ticks)
            seed, ticks, stabilityState, landingScore, DIFF_COUNT);
     game_shutdown();
     return 0;
+}
+
+static int input_test(void)
+{
+    int failures = 0;
+#define EXPECT(condition, label) do { \
+    if (!(condition)) { fprintf(stderr, "FAIL: %s\n", label); failures++; } \
+    else printf("PASS: %s\n", label); \
+} while (0)
+    game_init(1000, 640, 1337);
+    game_start_run();
+    G.lander.x = G.W * 0.5f;
+    G.lander.y = G.H * 0.1f;
+    G.lander.vx = G.lander.vy = G.lander.angularVelocity = 0;
+    G.lander.angle = 0;
+
+    game_set_held_controls(true, true, true, false);
+    game_tick();
+    EXPECT(G.lander.mainThrust && G.lander.leftThrust && !G.lander.rightThrust,
+           "main and side thrust apply simultaneously");
+
+    game_set_held_controls(true, false, true, true);
+    game_tick();
+    EXPECT(!G.lander.leftThrust && !G.lander.rightThrust,
+           "simultaneous opposite side controls cancel");
+
+    game_set_held_controls(true, true, false, true);
+    game_tick();
+    EXPECT(G.lander.mainThrust && !G.lander.leftThrust && G.lander.rightThrust,
+           "releasing one side preserves the other held controls");
+
+    game_set_held_controls(true, false, false, true);
+    game_tick();
+    EXPECT(!G.lander.mainThrust && G.lander.rightThrust,
+           "main thrust release does not release side thrust");
+
+    game_set_held_controls(false, false, false, false);
+    game_handle_key('w');
+    game_handle_key('a');
+    game_tick();
+    EXPECT(G.lander.mainThrust && G.lander.leftThrust,
+           "legacy press-only fallback retains simultaneous latch input");
+    for (int i = 0; i < 6; i++) game_tick();
+    EXPECT(!G.lander.mainThrust && !G.lander.leftThrust,
+           "legacy input latches expire without release events");
+
+    game_shutdown();
+#undef EXPECT
+    return failures ? 1 : 0;
 }
 
 static int render_test(unsigned seed)
@@ -190,9 +280,29 @@ static int run_interactive(void)
     double next = now_ms();
 
     while (!G.quit) {
-        int key;
-        while ((key = term_poll_key()) != -1)
+        kittykb_event event;
+        if (term_read_input() < 0) {
+            G.quit = true;
+            break;
+        }
+        bool heldInput = term_has_release_events();
+        while (term_next_key_event(&event)) {
+            if (event.action != KITTYKB_ACTION_PRESS) continue;
+            if (interrupt_event(&event)) {
+                G.quit = true;
+                continue;
+            }
+            int key = game_key_from_event(&event);
+            if (key < 0 || (heldInput && G.state == GS_PLAYING &&
+                            gameplay_control_key(key))) continue;
             game_handle_key(key);
+        }
+        if (G.quit) break;
+        game_set_held_controls(
+            heldInput,
+            term_key_down('w') || term_key_down(KITTYKB_KEY_UP),
+            term_key_down('a') || term_key_down(KITTYKB_KEY_LEFT),
+            term_key_down('d') || term_key_down(KITTYKB_KEY_RIGHT));
 
         game_tick();
         game_tick();
@@ -218,6 +328,9 @@ int main(int argc, char **argv)
         unsigned seed = argc > 2 ? (unsigned)strtoul(argv[2], NULL, 10) : 1337;
         int ticks = argc > 3 ? atoi(argv[3]) : 3600;
         return selftest(seed, ticks);
+    }
+    if (argc > 1 && !strcmp(argv[1], "--input-test")) {
+        return input_test();
     }
     if (argc > 1 && !strcmp(argv[1], "--render-test")) {
         unsigned seed = argc > 2 ? (unsigned)strtoul(argv[2], NULL, 10) : 1337;

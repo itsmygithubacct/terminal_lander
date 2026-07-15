@@ -1,9 +1,13 @@
 CC      ?= cc
-CFLAGS  ?= -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L
+KITTY_KEYBOARD_DIR ?= third_party/kitty_keyboard
+override CPPFLAGS += -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
+	-I$(KITTY_KEYBOARD_DIR)/include
+CFLAGS  ?= -O2 -Wall -Wextra -std=c11
 LDLIBS   = -lz -lm -lpthread
 
 SRC = src/main.c src/game.c src/render.c src/term.c src/sound.c
-OBJ = $(SRC:.c=.o)
+KITTY_OBJ = src/vendor_kitty_keyboard.o src/vendor_kitty_keyboard_posix.o
+OBJ = $(SRC:.c=.o) $(KITTY_OBJ)
 BIN = terminal-lander
 SFX_ASSETS := $(sort $(wildcard assets/sfx/*.wav))
 EXPECTED_SFX = 21
@@ -14,11 +18,22 @@ $(BIN): $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
 src/%.o: src/%.c src/terminal_lander.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 src/sound.o: src/pcm_wav.h
 
 src/render.o: src/font8x16.h
+src/term.o: $(KITTY_KEYBOARD_DIR)/include/kitty_keyboard.h \
+	$(KITTY_KEYBOARD_DIR)/include/kitty_keyboard_posix.h
+
+src/vendor_kitty_keyboard.o: $(KITTY_KEYBOARD_DIR)/src/kitty_keyboard.c \
+	$(KITTY_KEYBOARD_DIR)/include/kitty_keyboard.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+src/vendor_kitty_keyboard_posix.o: $(KITTY_KEYBOARD_DIR)/src/kitty_keyboard_posix.c \
+	$(KITTY_KEYBOARD_DIR)/include/kitty_keyboard.h \
+	$(KITTY_KEYBOARD_DIR)/include/kitty_keyboard_posix.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 validate-audio:
 	@set -eu; \
@@ -31,6 +46,7 @@ validate-audio:
 	done
 
 test: $(BIN) validate-audio
+	./$(BIN) --input-test
 	./$(BIN) --selftest 1337 3600
 	./$(BIN) --render-test 42
 
