@@ -40,4 +40,4 @@ selection metrics, loop settings, and mastering details are in
 [`audio-provenance.json`](audio-provenance.json).
 
 The embedded terminal font keeps the public-domain/permissive notice described
-in the root `LICENSE` and `src/font8x16.h`.
+in the root `LICENSE` and `third_party/soft-raster/src/font8x16.h`.

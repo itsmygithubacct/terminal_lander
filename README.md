@@ -78,11 +78,20 @@ packaging and installed-layout tests.
 
 | File | Role |
 |------|------|
-| `src/term.c` | Kitty keyboard events, compatibility input, graphics frames, threaded zlib + base64 presenter |
+| `src/term.c` | Kitty keyboard events, compatibility input, thin adapter over the kitty-framebuffer presenter |
 | `src/game.c` | lander physics, terrain generation, pads, particles, difficulty, scoring |
-| `src/render.c` | software rasterizer, scene, HUD, menus, embedded PSF font |
-| `src/sound.c` | strict PCM WAV banks, seamless loop playback, procedural fallback, and CLI-sink mixer |
+| `src/render.c` | scene, HUD, and menu drawing over the soft-raster primitives |
+| `src/sound.c` | strict PCM WAV banks, procedural fallback synthesis, playback through the pcm-mixer voices |
 | `src/main.c` | interactive loop, selftest, render-test, sound-test |
+
+Shared infrastructure is vendored under `third_party/`:
+
+| Library | Role |
+|---------|------|
+| `third_party/kitty-framebuffer` | zlib + base64 kitty graphics presenter thread, raw mode, restore sequences |
+| `third_party/soft-raster` | anti-aliased software rasterizer with the embedded 8x16 PSF font |
+| `third_party/pcm-mixer` | CLI-sink audio transport, voice mixer, strict WAV loader |
+| `third_party/kitty_keyboard` | kitty keyboard protocol decoding with press/release state |
 
 ## License
 
@@ -91,4 +100,4 @@ Code is MIT licensed; see [LICENSE](LICENSE). The ElevenLabs-generated WAVs in
 standalone MIT samples. Full terms and artifact hashes are in [asset
 provenance](docs/asset-sources.md). The embedded terminal font comes from
 Debian console-setup's public-domain console fonts; details are preserved in
-`src/font8x16.h`.
+`third_party/soft-raster/src/font8x16.h`.

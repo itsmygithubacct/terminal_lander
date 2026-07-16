@@ -1,42 +1,35 @@
-/* Banked PCM audio with a procedural fallback, streamed to a CLI sink. */
+/* Banked PCM audio with a procedural fallback.
+ *
+ * Sound effects are baked procedurally at startup and replaced by the
+ * WAV asset bank when it is present (several recorded variants per
+ * effect, chosen at random without immediate repeats).  Transport and
+ * mixing are delegated to the vendored pcm-mixer library: it probes for
+ * a CLI sink (pacat, pw-play, aplay, play), mixes voices on its own
+ * thread, and degrades to silence when no sink is available.
+ */
 #include "terminal_lander.h"
-#include "pcm_wav.h"
-#include <errno.h>
-#include <fcntl.h>
+#include "pcm_mixer.h"
+#include <limits.h>
 #include <math.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
 #include <unistd.h>
-#include <pthread.h>
 
 #define SR 44100
-#define MIX_FRAMES 192
-#define MAX_VOICES 18
+#define MAX_VOICES 20
 #define LOOP_COUNT 2
 #define MAX_SFX_VARIANTS 8
 
 typedef struct { int16_t *data; int len; } Sample;
-typedef struct {
-    const int16_t *data;
-    int len;
-    float pos, step, vol;
-    bool active, loop;
-} Voice;
 
 static Sample samples[SOUND_COUNT][MAX_SFX_VARIANTS];
 static uint8_t sample_counts[SOUND_COUNT];
 static uint8_t last_variants[SOUND_COUNT];
-static Voice voices[MAX_VOICES];
-static Voice loops[LOOP_COUNT];
-static pthread_mutex_t soundLock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_t mixer;
-static volatile bool running = false;
-static bool enabled = true;
-static int sinkFd = -1;
-static pid_t sinkPid = -1;
+static pcmmix mixer;
+static bool mixerStarted = false;
+static bool soundEnabled = true;
+static int loop_handles[LOOP_COUNT] = { -1, -1 };
 
 static uint32_t srng = 0x71d15eedu;
 
@@ -251,10 +244,15 @@ static void load_external_sounds(void)
             if (snprintf(full, sizeof full, "%s/%s", sound_asset_root, relative) >=
                 (int)sizeof full)
                 break;
-            int16_t *data = NULL;
-            int frames = 0;
-            if (!pcm_wav_load_mono_44100(full, &data, &frames)) break;
-            loaded[count++] = (Sample){data, frames};
+            size_t frames = 0;
+            char err[128];
+            int16_t *data = pcmmix_wav_load(full, &frames, err, sizeof err);
+            if (!data) break;
+            if (frames == 0 || frames > (size_t)INT_MAX) {
+                pcmmix_wav_free(data);
+                break;
+            }
+            loaded[count++] = (Sample){data, (int)frames};
         }
         if (count == 0) continue;
         clear_sample_bank(id);
@@ -275,222 +273,73 @@ static int choose_variant(int id)
     return variant;
 }
 
-static bool in_path(const char *name)
-{
-    const char *path = getenv("PATH");
-    if (!path) return false;
-    char *copy = strdup(path);
-    if (!copy) return false;
-    bool found = false;
-    for (char *p = copy, *tok; (tok = strsep(&p, ":")) != NULL;) {
-        if (!*tok) tok = ".";
-        char full[512];
-        snprintf(full, sizeof full, "%s/%s", tok, name);
-        if (access(full, X_OK) == 0) { found = true; break; }
-    }
-    free(copy);
-    return found;
-}
-
-static bool spawn_sink(int idx)
-{
-    struct Sink {
-        const char *exe;
-        const char *argv[14];
-    } sinks[] = {
-        { "pacat",   { "pacat", "--raw", "--latency-msec=18", "--rate=44100", "--channels=1", "--format=s16le", NULL } },
-        { "pw-play", { "pw-play", "--raw", "--rate=44100", "--channels=1", "--format=s16", "-", NULL } },
-        { "aplay",   { "aplay", "-q", "-f", "S16_LE", "-r", "44100", "-c", "1", "-B", "30000", "-F", "10000", NULL } },
-        { "play",    { "play", "-q", "-t", "s16", "-r", "44100", "-c", "1", "-", NULL } },
-    };
-    if (idx < 0 || idx >= (int)(sizeof sinks / sizeof sinks[0])) return false;
-    if (!in_path(sinks[idx].exe)) return false;
-
-    int pipefd[2];
-    if (pipe(pipefd) != 0) return false;
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return false;
-    }
-    if (pid == 0) {
-        dup2(pipefd[0], STDIN_FILENO);
-        close(pipefd[0]);
-        close(pipefd[1]);
-        execvp(sinks[idx].exe, (char *const *)sinks[idx].argv);
-        _exit(127);
-    }
-    close(pipefd[0]);
-    sinkFd = pipefd[1];
-    sinkPid = pid;
-    return true;
-}
-
-static void close_sink(void)
-{
-    if (sinkFd >= 0) {
-        close(sinkFd);
-        sinkFd = -1;
-    }
-    if (sinkPid > 0) {
-        int status;
-        waitpid(sinkPid, &status, WNOHANG);
-        sinkPid = -1;
-    }
-}
-
-static void mix_voice(Voice *v, float *mix, int n)
-{
-    if (!v->active || !v->data || v->len <= 0) return;
-    for (int i = 0; i < n; i++) {
-        int ip = (int)v->pos;
-        if (ip >= v->len) {
-            if (v->loop) {
-                v->pos = fmodf(v->pos, (float)v->len);
-                ip = (int)v->pos;
-            } else {
-                v->active = false;
-                break;
-            }
-        }
-        int ip2 = ip + 1;
-        if (ip2 >= v->len) ip2 = v->loop ? 0 : ip;
-        float frac = v->pos - ip;
-        float a = v->data[ip] / 32768.0f;
-        float b = v->data[ip2] / 32768.0f;
-        mix[i] += (a + (b - a) * frac) * v->vol;
-        v->pos += v->step;
-    }
-}
-
-static void *mixer_main(void *arg)
-{
-    (void)arg;
-    float mix[MIX_FRAMES];
-    int16_t out[MIX_FRAMES];
-    const useconds_t chunkUs = (useconds_t)((1000000.0 * MIX_FRAMES) / SR);
-
-    while (running) {
-        memset(mix, 0, sizeof mix);
-        bool hasAudio = false;
-        pthread_mutex_lock(&soundLock);
-        if (enabled) {
-            for (int i = 0; i < LOOP_COUNT; i++) {
-                if (loops[i].active) hasAudio = true;
-                mix_voice(&loops[i], mix, MIX_FRAMES);
-            }
-            for (int i = 0; i < MAX_VOICES; i++) {
-                if (voices[i].active) hasAudio = true;
-                mix_voice(&voices[i], mix, MIX_FRAMES);
-            }
-        }
-        pthread_mutex_unlock(&soundLock);
-
-        if (!hasAudio) {
-            usleep(1500);
-            continue;
-        }
-
-        for (int i = 0; i < MIX_FRAMES; i++) {
-            float v = tanhf(mix[i] * 0.85f);
-            out[i] = (int16_t)(clampf(v, -1.0f, 1.0f) * 32767.0f);
-        }
-
-        if (sinkFd >= 0) {
-            const uint8_t *p = (const uint8_t *)out;
-            size_t left = sizeof out;
-            while (left > 0 && running) {
-                ssize_t n = write(sinkFd, p, left);
-                if (n < 0) {
-                    if (errno == EINTR) continue;
-                    close_sink();
-                    break;
-                }
-                p += n;
-                left -= (size_t)n;
-            }
-        }
-        usleep(chunkUs);
-    }
-    return NULL;
-}
-
 bool sound_init(void)
 {
-    signal(SIGPIPE, SIG_IGN);
+    pcmmix_options options;
+
     synth_all();
     memset(last_variants, 0xff, sizeof last_variants);
     load_external_sounds();
-    for (int i = 0; i < 4 && sinkFd < 0; i++) spawn_sink(i);
-    if (sinkFd < 0) return false;
-    running = true;
-    if (pthread_create(&mixer, NULL, mixer_main, NULL) != 0) {
-        running = false;
-        close_sink();
-        return false;
-    }
+
+    pcmmix_options_init(&options);
+    options.max_voices = MAX_VOICES;
+    if (!pcmmix_start(&mixer, &options)) return false;
+    mixerStarted = true;
+    for (int i = 0; i < LOOP_COUNT; i++) loop_handles[i] = -1;
+    pcmmix_set_enabled(&mixer, soundEnabled);
     return true;
 }
 
 void sound_shutdown(void)
 {
-    if (running) {
-        running = false;
-        pthread_join(mixer, NULL);
+    if (mixerStarted) {
+        pcmmix_stop(&mixer);
+        mixerStarted = false;
     }
-    close_sink();
+    for (int i = 0; i < LOOP_COUNT; i++) loop_handles[i] = -1;
+    /* safe only after pcmmix_stop(): the mixer references sample memory
+     * until it has been stopped */
     for (int i = 0; i < SOUND_COUNT; i++) clear_sample_bank(i);
 }
 
 void sound_set_enabled(bool on)
 {
-    pthread_mutex_lock(&soundLock);
-    enabled = on;
-    if (!enabled) {
-        memset(voices, 0, sizeof voices);
-        memset(loops, 0, sizeof loops);
-    }
-    pthread_mutex_unlock(&soundLock);
+    soundEnabled = on;
+    if (mixerStarted) pcmmix_set_enabled(&mixer, on);
 }
 
-bool sound_is_enabled(void) { return enabled; }
+bool sound_is_enabled(void)
+{
+    return mixerStarted ? pcmmix_is_enabled(&mixer) : soundEnabled;
+}
 
 void sound_play(int id, float vol, float pitch)
 {
     if (id < 0 || id >= SOUND_COUNT || sample_counts[id] == 0) return;
+    if (!mixerStarted) return;
     Sample *sample = &samples[id][choose_variant(id)];
-    pthread_mutex_lock(&soundLock);
-    for (int i = 0; i < MAX_VOICES; i++) {
-        if (!voices[i].active) {
-            voices[i] = (Voice){
-                .data = sample->data, .len = sample->len,
-                .pos = 0, .step = pitch <= 0 ? 1.0f : pitch,
-                .vol = clampf(vol, 0, 1.5f), .active = true, .loop = false
-            };
-            break;
-        }
-    }
-    pthread_mutex_unlock(&soundLock);
+    pcmmix_sample clip = { sample->data, (size_t)sample->len };
+    (void)pcmmix_play(&mixer, &clip, clampf(vol, 0, 1.5f), pitch);
 }
 
 void sound_loop(int id, bool on, float vol, float pitch)
 {
     if (id < 0 || id >= LOOP_COUNT || sample_counts[id] == 0) return;
-    pthread_mutex_lock(&soundLock);
-    if (on) {
-        if (!loops[id].active) {
-            Sample *sample = &samples[id][choose_variant(id)];
-            loops[id].data = sample->data;
-            loops[id].len = sample->len;
-            loops[id].pos = 0;
-        }
-        loops[id].step = pitch <= 0 ? 1.0f : pitch;
-        loops[id].vol = clampf(vol, 0, 1.2f);
-        loops[id].loop = true;
-        loops[id].active = true;
-    } else {
-        loops[id].active = false;
+    if (!mixerStarted) return;
+    if (!on) {
+        if (loop_handles[id] > 0)
+            (void)pcmmix_voice_stop(&mixer, loop_handles[id]);
+        loop_handles[id] = -1;
+        return;
     }
-    pthread_mutex_unlock(&soundLock);
+    vol = clampf(vol, 0, 1.2f);
+    if (pitch <= 0) pitch = 1.0f;
+    /* an already-running loop is retuned in place, matching the old
+     * mixer's keep-position semantics */
+    if (loop_handles[id] > 0 &&
+        pcmmix_voice_set(&mixer, loop_handles[id], vol, pitch))
+        return;
+    Sample *sample = &samples[id][choose_variant(id)];
+    pcmmix_sample clip = { sample->data, (size_t)sample->len };
+    loop_handles[id] = pcmmix_loop(&mixer, &clip, vol, pitch);
 }
