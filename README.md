@@ -95,9 +95,9 @@ Shared infrastructure is vendored under `third_party/`:
 
 ## License
 
-Code is MIT licensed; see [LICENSE](LICENSE). The ElevenLabs-generated WAVs in
-`assets/sfx/` have a separate bundled-game asset exception and are not
-standalone MIT samples. Full terms and artifact hashes are in [asset
-provenance](docs/asset-sources.md). The embedded terminal font comes from
-Debian console-setup's public-domain console fonts; details are preserved in
-`third_party/soft-raster/src/font8x16.h`.
+Code and the 21 WAVs in `assets/sfx/` are MIT licensed; see [LICENSE](LICENSE).
+The audio is rendered locally from procedural synthesis and CC0/public-domain
+recordings, and no ElevenLabs material remains. Full source details and
+artifact hashes are in [asset provenance](docs/asset-sources.md). The embedded
+terminal font comes from Debian console-setup's public-domain console fonts;
+details are preserved in `third_party/soft-raster/src/font8x16.h`.

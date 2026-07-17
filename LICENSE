@@ -22,15 +22,14 @@ SOFTWARE.
 
 ---
 
-Sound-effect asset exception
+Audio provenance
 
-The MIT License above does not apply to the ElevenLabs-generated WAV files in
-assets/sfx/. Those files are included solely as bundled components of Terminal
-Lander, subject to the ElevenLabs Terms of Service, Sound Effects Terms, and
-Prohibited Use Policy. No permission is granted here to sell, distribute,
-license, sublicense, or otherwise exploit those sound effects on a standalone
-basis, including as isolated files, samples, or part of a sound library. See
-docs/asset-sources.md and docs/audio-provenance.json.
+The 21 WAV files under assets/sfx/ are included in the MIT grant above. They are
+deterministic local renders whose recorded inputs are limited to CC0 1.0 or
+public-domain sources; other layers are procedural synthesis. The superseded
+ElevenLabs bank is not present. See docs/asset-sources.md for the readable
+provenance and docs/audio-provenance.json for the per-file source and SHA-256
+record.
 
 ---
 

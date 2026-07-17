@@ -508,7 +508,7 @@
       "style": "scifi"
     }
   ],
-  "licence": "CC0-derived",
+  "licence": "MIT as distributed in this repository; locally rendered from procedural synthesis and CC0 1.0 / public-domain source recordings",
   "licence_basis": "Every artifact is rendered locally by the python_sound_assets generators. Procedural cues are synthesised DSP with no recorded input. Foley cues (crash, landing) are rendered from bundled source recordings that are CC0 1.0 / public domain only; each recording's collection, licence and source page is recorded per cue below. This bank replaces the previous ElevenLabs assets, which carried provider-terms restrictions; no ElevenLabs material remains.",
   "mastering": {
     "description": "Each generator masters its own cue to that cue's target peak; the packs are written directly at runtime format with no further post-processing applied when installing into the game.",
@@ -751,8 +751,22 @@
       "variant": 3
     }
   ],
+  "bank_only_sources": [
+    {
+      "name": "Tire.ogg",
+      "author": "egomassive",
+      "license": "CC0 1.0",
+      "source_page": "https://freesound.org/people/egomassive/sounds/536769/",
+      "original_file": "536769__egomassive__tire.ogg",
+      "original_sha256": "6a6ddbb1b27059bc661aed73f0fbc1bed1ae1828427470cb692a8298805a029e",
+      "generator_source_bank_file": "aircraft_spacecraft_generator/sources/egomassive_tire.wav",
+      "generator_source_bank_sha256": "533d71d95260192b8cf36486bf6ba559a585bdea056abe46871d6fe3d7643837",
+      "source_note": "Rubber losing grip on tarmac; derived by its author from RutgerMuller's CC0 Tires Squeaking and released under CC0 1.0 in turn.",
+      "artifact_use": "none: the recording is admissible for wheeled aircraft, but the terminal-lander pack uses the lander craft profile with pad gear; its touchdown branch never loads the tire source, and no promoted runtime artifact contains it"
+    }
+  ],
   "provider": "local procedural generators (python_sound_assets)",
   "reproducibility": "Deterministic: re-running each cue's recorded command at its recorded seed reproduces the byte-identical WAV listed in final_sha256.",
   "schema": 1,
-  "standalone_distribution": "intended only as bundled terminal-lander game assets, not a standalone SFX library"
+  "standalone_distribution": "included in the repository's MIT grant; no upstream provider terms restrict standalone redistribution"
 }
